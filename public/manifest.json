@@ -1,0 +1,9 @@
+{
+  "name": "Work Chargers",
+  "short_name": "Chargers",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#111418",
+  "theme_color": "#111418",
+  "icons": []
+}
