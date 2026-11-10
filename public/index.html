@@ -16,29 +16,44 @@
   h1 { font-size:22px; margin:0; }
   button { font:inherit; border:0; border-radius:10px; padding:10px 14px; background:#2f81f7; color:#fff; }
   button.ghost { background:transparent; color:var(--mute); border:1px solid var(--mute); }
+  button.link { background:none; color:var(--off); padding:4px 0; font-size:14px; }
   .card { background:var(--card); border-radius:14px; padding:14px; margin-bottom:12px; }
   .row { display:flex; justify-content:space-between; align-items:center; gap:8px; }
   .badge { font-size:13px; padding:3px 8px; border-radius:99px; color:#fff; }
   .available { background:var(--ok); } .in_use { background:var(--busy); } .offline { background:var(--off); } .unknown { background:var(--mute); }
   .mute { color:var(--mute); font-size:13px; }
   .err { color:var(--off); }
-  input { font:inherit; width:100%; box-sizing:border-box; padding:10px; border-radius:10px; border:1px solid var(--mute); background:var(--card); color:var(--fg); }
+  .actions { display:flex; gap:12px; align-items:center; }
+  input { font:inherit; width:100%; box-sizing:border-box; padding:10px; border-radius:10px; border:1px solid var(--mute); background:var(--card); color:var(--fg); margin-bottom:8px; }
 </style>
 </head>
 <body>
 <header><h1>Work Chargers</h1><button class="ghost" id="refresh">Refresh</button></header>
+
 <div id="login" class="card" hidden>
   <p>Enter your passcode</p>
   <input id="pass" type="password" autocomplete="current-password">
-  <p><button id="save">Continue</button></p>
+  <button id="save">Continue</button>
 </div>
+
 <div id="list"></div>
 <p class="mute" id="updated"></p>
+
+<div class="card" id="addBox">
+  <strong>Add a favorite</strong>
+  <p class="mute">Enter a ChargePoint station ID and an optional name.</p>
+  <input id="newId" inputmode="numeric" placeholder="Station ID, for example 123456">
+  <input id="newName" placeholder="Name (optional), for example Building 4 garage">
+  <button id="add">Add</button>
+</div>
 
 <script>
 const $ = id => document.getElementById(id);
 const pass = () => localStorage.getItem("passcode") || "";
 const hdr = () => ({ "X-Passcode": pass() });
+const getFavs = () => JSON.parse(localStorage.getItem("favorites") || "[]");
+const setFavs = f => localStorage.setItem("favorites", JSON.stringify(f));
+const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;" }[c]));
 
 function statusOf(d) {
   // Library output shape is unverified; look for common fields defensively.
@@ -52,27 +67,50 @@ function statusOf(d) {
 async function load() {
   if (!pass()) { $("login").hidden = false; return; }
   $("login").hidden = true;
+  const favs = getFavs();
+  if (!favs.length) { $("list").innerHTML = '<p class="mute">No favorites yet. Add one below.</p>'; return; }
   $("list").innerHTML = '<p class="mute">Loading…</p>';
   try {
-    const r = await fetch("/api/status", { headers: hdr() });
+    const ids = favs.map(f => f.id).join(",");
+    const r = await fetch("/api/status?ids=" + encodeURIComponent(ids), { headers: hdr() });
     if (r.status === 401) { localStorage.removeItem("passcode"); $("login").hidden = false; $("list").innerHTML = ""; return; }
     const j = await r.json();
     if (!r.ok) throw new Error(j.error || r.status);
     $("list").innerHTML = "";
     for (const s of j.stations) {
+      const fav = favs.find(f => f.id === s.id) || {};
       const [label, cls] = s.error ? ["Error", "unknown"] : statusOf(s.data);
       const el = document.createElement("div");
       el.className = "card";
-      el.innerHTML = `<div class="row"><strong>Station ${s.id}</strong><span class="badge ${cls}">${label}</span></div>
-        ${s.error ? `<p class="err">${s.error}</p>` : ""}
-        <p><button data-id="${s.id}">Join waitlist</button></p>`;
-      el.querySelector("button").onclick = () => join(s.id);
+      el.innerHTML = `<div class="row"><strong>${esc(fav.name || "Station " + s.id)}</strong><span class="badge ${cls}">${label}</span></div>
+        <p class="mute">ID ${esc(s.id)}</p>
+        ${s.error ? `<p class="err">${esc(s.error)}</p>` : ""}
+        <div class="actions"><button class="join">Join waitlist</button><button class="link remove">Remove</button></div>`;
+      el.querySelector(".join").onclick = () => join(s.id);
+      el.querySelector(".remove").onclick = () => remove(s.id);
       $("list").appendChild(el);
     }
     $("updated").textContent = "Updated " + new Date().toLocaleTimeString();
   } catch (e) {
-    $("list").innerHTML = `<p class="err">${e.message}</p>`;
+    $("list").innerHTML = `<p class="err">${esc(e.message)}</p>`;
   }
+}
+
+function add() {
+  const id = $("newId").value.trim();
+  if (!/^\d+$/.test(id)) { alert("Station ID must be digits only."); return; }
+  const favs = getFavs();
+  if (favs.some(f => f.id === id)) { alert("Already in your favorites."); return; }
+  favs.push({ id, name: $("newName").value.trim() });
+  setFavs(favs);
+  $("newId").value = ""; $("newName").value = "";
+  load();
+}
+
+function remove(id) {
+  if (!confirm(`Remove station ${id} from favorites?`)) return;
+  setFavs(getFavs().filter(f => f.id !== id));
+  load();
 }
 
 async function join(id) {
@@ -84,6 +122,7 @@ async function join(id) {
 
 $("save").onclick = () => { localStorage.setItem("passcode", $("pass").value); load(); };
 $("refresh").onclick = load;
+$("add").onclick = add;
 load();
 </script>
 </body>
