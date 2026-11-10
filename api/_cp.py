@@ -1,15 +1,13 @@
 """Shared helpers: auth check, ChargePoint client, JSON responses.
 
-NOTE: python-chargepoint method names are unverified against the installed
-version. Calls are wrapped so failures return a clear error instead of crashing.
+python-chargepoint appears to be async (it needs a running event loop), so each
+request builds the client and does its work inside one asyncio.run(). Method
+names are unverified; calls handle both sync and async results.
 """
+import asyncio
+import inspect
 import json
 import os
-import time
-
-_client = None
-_client_ts = 0
-CLIENT_TTL = 600  # re-login every 10 minutes at most
 
 
 def authorized(headers):
@@ -17,17 +15,35 @@ def authorized(headers):
     return bool(secret) and headers.get("X-Passcode", "") == secret
 
 
-def client():
-    global _client, _client_ts
-    if _client is None or time.time() - _client_ts > CLIENT_TTL:
-        from python_chargepoint import ChargePoint
-        _client = ChargePoint(os.environ["CP_USERNAME"], os.environ["CP_PASSWORD"])
-        _client_ts = time.time()
-    return _client
-
-
 def favorites():
     return [s.strip() for s in os.environ.get("FAVORITE_STATION_IDS", "").split(",") if s.strip()]
+
+
+async def maybe_await(value):
+    return await value if inspect.isawaitable(value) else value
+
+
+async def _with_client(work):
+    from python_chargepoint import ChargePoint
+    user, pw = os.environ["CP_USERNAME"], os.environ["CP_PASSWORD"]
+    factory = getattr(ChargePoint, "create", None)
+    cp = await maybe_await(factory(user, pw)) if factory else ChargePoint(user, pw)
+    try:
+        return await work(cp)
+    finally:
+        for name in ("close", "logout", "aclose"):
+            closer = getattr(cp, name, None)
+            if closer:
+                try:
+                    await maybe_await(closer())
+                except Exception:
+                    pass
+                break
+
+
+def run(work):
+    """Run `async def work(cp)` with a freshly logged-in client."""
+    return asyncio.run(_with_client(work))
 
 
 def to_plain(obj):
